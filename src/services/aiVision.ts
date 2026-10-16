@@ -200,7 +200,8 @@ class VisionAIService {
       }
     }
 
-    // Pass 2: Define 4 overlapping quadrants (58% width/height to ensure 16% central overlap)
+    // Pass 2: Define 5 overlapping tiles: 4 quadrants + 1 central focal band
+    // The central focal band specifically magnifies rows 2, 3, 4 where distant furniture loses resolution
     const sliceWidth = Math.round(width * 0.58);
     const sliceHeight = Math.round(height * 0.58);
 
@@ -209,24 +210,34 @@ class VisionAIService {
       { x: width - sliceWidth, y: 0, w: sliceWidth, h: sliceHeight }, // Top-Right
       { x: 0, y: height - sliceHeight, w: sliceWidth, h: sliceHeight }, // Bottom-Left
       { x: width - sliceWidth, y: height - sliceHeight, w: sliceWidth, h: sliceHeight }, // Bottom-Right
+      // Central focal band for classroom perspective rows
+      { 
+        x: Math.round(width * 0.15), 
+        y: Math.round(height * 0.20), 
+        w: Math.round(width * 0.70), 
+        h: Math.round(height * 0.60) 
+      }
     ];
 
     const sliceCanvas = document.createElement('canvas');
-    sliceCanvas.width = sliceWidth;
-    sliceCanvas.height = sliceHeight;
     const sliceCtx = sliceCanvas.getContext('2d');
 
     if (sliceCtx) {
+      // Small distant objects in tiles have lower softmax activations: use adaptive tile sensitivity
+      const tileConfidence = Math.max(0.18, minConfidence * 0.82);
+
       for (const slice of slices) {
-        sliceCtx.clearRect(0, 0, sliceWidth, sliceHeight);
+        sliceCanvas.width = slice.w;
+        sliceCanvas.height = slice.h;
+        sliceCtx.clearRect(0, 0, slice.w, slice.h);
         sliceCtx.drawImage(
           source,
           slice.x, slice.y, slice.w, slice.h,
-          0, 0, sliceWidth, sliceHeight
+          0, 0, slice.w, slice.h
         );
 
-        // Run inference on zoomed tile
-        const tilePreds = await this.model.detect(sliceCanvas, 50, minConfidence);
+        // Run inference on zoomed tile with higher object capacity
+        const tilePreds = await this.model.detect(sliceCanvas, 65, tileConfidence);
         for (const p of tilePreds) {
           if (p.class.toLowerCase() === 'person') {
             filteredPersons++;
@@ -243,8 +254,8 @@ class VisionAIService {
       }
     }
 
-    // Apply Non-Maximum Suppression to deduplicate
-    const deduplicated = this.applyNMS(allPredictions, 0.42);
+    // Apply Non-Maximum Suppression to deduplicate while preserving adjacent classroom chairs
+    const deduplicated = this.applyNMS(allPredictions, 0.48);
 
     return {
       predictions: deduplicated,

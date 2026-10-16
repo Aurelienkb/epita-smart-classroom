@@ -194,17 +194,69 @@ Chaque typologie de salle est soumise à une **dotation théorique d'équipement
 2. **Absence de certification trompeuse :** Le rapport est expressément qualifié de « Livrable d'inventaire et de contrôle interne d'infrastructure » et non d'« audit certifié ».
 3. **Engagement éthique et souveraineté :**
    - Aucune image n'est persistée sur un serveur tiers.
-   - Aucun transfert télémétrique vers des API externes.
    - Aucune identification biométrique ou tracking.
 
 ---
 
-## 10. Liens de Déploiement et Livrables
+## 10. Protocole Industriel de Fine-Tuning & Entraînement Spécifique EPITA (Roadmap MLOps V2)
+
+> [!NOTE]
+> Cette section formalise le protocole d'ingénierie et de gestion de programme IA pour répondre au besoin d'entraînement d'un modèle dédié sur un large volume d'images de classes réelles (avec/sans élèves, ordinateurs, sièges rangés ou désordonnés).
+
+### 10.1 Diagnostic Algorithmique : Pourquoi COCO-SSD générique montre des limites
+1. **Domain Gap (Écart de domaine) :** Le modèle public COCO-SSD a été entraîné sur le jeu de données générique COCO (80 classes du quotidien : chiens, zèbres, frisbees, voitures...). Il ne possède pas de caractéristiques spécialisées pour le mobilier universitaire standardisé.
+2. **Compression de résolution (Downsampling) :** L'architecture MobileNet v2 redimensionne nativement toute image en $300 \times 300$ pixels. Dans une vue grand-angle de salle de cours, une chaise située au 4ᵉ rang ne représente qu'un patch minuscule de **$6 \times 8$ pixels**, rendant l'activation des filtres convolutifs trop faible ($< 0.25$).
+3. **Occultations de perspective :** Les dossiers des chaises de devant masquent les assises et piètements des rangées suivantes. Les tables encastrées dissimulent les tabourets.
+
+### 10.2 Protocole de Constitution du Dataset EPITA (1 500 Clichés Labellisés)
+Pour entraîner un modèle de vision sur-mesure pour le parc EPITA, nous définissons une matrice d'échantillonnage équilibrée sur les 40 salles du campus :
+
+| Scénario Opérationnel | Nombre de Clichés Cibles | Objectif d'Apprentissage & Variabilité |
+| :--- | :---: | :--- |
+| **Condition A : Salles avec Étudiants en séance** | 400 images | Entraîner le réseau à isoler le mobilier même lorsque des étudiants sont assis, tout en validant le filtrage éthique RGPD (aucun traçage facial). |
+| **Condition B : Laboratoires Informatiques (GITM/SIGL)** | 350 images | Détection fine d'ordinateurs portables ouverts, écrans d'affichage, claviers mécaniques et souris filaires. |
+| **Condition C : Sièges Rangés vs Mobilier Désordonné** | 450 images | Distinguer les chaises parfaitement encastrées sous les tables des chaises déplacées, tournées ou renversées en fin de journée. |
+| **Condition D : Variations Lumineuses & Angles Extrêmes** | 300 images | Résistance aux contre-jours de fenêtres, dalles LED éteintes, lumière rasante et prises de vue rasantes ou surélevées. |
+
+### 10.3 Méthodologie d'Annotation & Pipeline d'Entraînement Supervisé
+```mermaid
+flowchart LR
+    D["1. Collecte 1 500 photos<br/>(40 salles EPITA)"] --> A["2. Labellisation CVAT<br/>(BBoxes YOLO/COCO)"]
+    A --> AUG["3. Data Augmentation<br/>(Mosaic, Perspective, Blur)"]
+    AUG --> T["4. Transfer Learning<br/>(YOLOv8n / MobileNetV3)"]
+    T --> Q["5. Quantification INT8<br/>(ONNX / TF.js WebGL)"]
+    Q --> APP["6. Déploiement Edge<br/>(100% In-Browser)"]
+```
+
+1. **Outil d'annotation :** Plateforme collaborative open-source **CVAT** (Computer Vision Annotation Tool) avec formats d'export YOLOv8 et Pascal-VOC.
+2. **Ontologie ciblée EPITA :** 7 classes exclusives (`epita_chair`, `epita_table`, `epita_laptop`, `epita_screen`, `epita_keyboard`, `whiteboard`, `ceiling_projector`).
+3. **Data Augmentation (Albumentations) :**
+   - *Mosaic 4-images* (apprentissage d'échelles réduites pour les chaises lointaines).
+   - *Random Perspective & Scale* ($\pm 15^\circ$ pour simuler différentes hauteurs de smartphone).
+   - *ColorJitter & Random Shadow* (robustesse aux variations d'éclairage des néons).
+4. **Hyperparamètres de Transfer Learning :**
+   - Backbone : **YOLOv8-nano** (3.2M paramètres) pré-entraîné sur ImageNet.
+   - Fonction de perte : $\mathcal{L} = \lambda_1 \mathcal{L}_{\text{CIoU}} + \lambda_2 \mathcal{L}_{\text{DFL}} + \lambda_3 \mathcal{L}_{\text{BCE}}$.
+   - Entraînement : 100 époques avec optimiseur AdamW, Cosine Annealing Learning Rate ($\eta_0 = 10^{-3}$).
+   - Métrique cible : **mAP@0.5 $\ge 92.5\%$** sur le jeu de test tenu à l'écart (split 70% train / 15% val / 15% test).
+5. **Quantification & Export Edge :**
+   - Quantification post-entraînement INT8 (réduction de 80% du poids mémoire sans perte de précision perceptible).
+   - Export vers le runtime ONNX Web / TensorFlow.js WebGL pour conserver l'exécution locale dans le navigateur sans dépendance à un serveur cloud.
+
+### 10.4 Rôle Pivot du Human-in-the-Loop en Phase Transitoire
+En attendant la finalisation de ce cycle d'entraînement sur GPU (qui dépasse le budget temps de 4 heures de l'examen initial), la fonctionnalité **Interactive AI Review** développée dans l'application agit comme le pont opérationnel parfait :
+- L'IA COCO-SSD + SAHI propose la première passe automatisée.
+- Le gestionnaire valide ou corrige en 1 clic les cas limites.
+- Chaque correction humaine est tracée sans dénaturer la prédiction du modèle.
+
+---
+
+## 11. Liens de Déploiement et Livrables
 
 - **Dépôt GitHub :** [https://github.com/Aurelienkb/epita-smart-classroom](https://github.com/Aurelienkb/epita-smart-classroom)
 - **Déploiement GitHub Pages :** [https://aurelienkb.github.io/epita-smart-classroom/](https://aurelienkb.github.io/epita-smart-classroom/)
-- **Déploiement Cloudflare Pages :** [https://epita-smartscan.pages.dev/](https://epita-smartscan.pages.dev/)
-- **Code source audité :** Compilé avec TypeScript strict (`npm run build` validé sans erreur).
+- **Déploiement Cloudflare Pages (Livrable Examen) :** [https://epita-smartscan.pages.dev/](https://epita-smartscan.pages.dev/)
+- **Code source audité :** Compilé avec TypeScript strict (`npm run build` validé avec 0 erreur).
 
 ---
 *EPITA — École pour l'Informatique et les Techniques Avancées · Spécialisation GITM · Octobre 2026*

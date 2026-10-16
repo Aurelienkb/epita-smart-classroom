@@ -64,7 +64,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 }) => {
   const [cameraActive, setCameraActive] = useState<boolean>(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
-  const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.28);
+  const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.22);
   const [boostContrast, setBoostContrast] = useState<boolean>(true);
   const [enableSahi, setEnableSahi] = useState<boolean>(true);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
@@ -554,9 +554,9 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
               </span>
               <input
                 type="range"
-                min="0.15"
-                max="0.75"
-                step="0.05"
+                min="0.10"
+                max="0.65"
+                step="0.02"
                 value={confidenceThreshold}
                 onChange={(e) => setConfidenceThreshold(parseFloat(e.target.value))}
                 className="w-18 sm:w-24 h-1.5 bg-[#222E47] rounded-lg appearance-none cursor-pointer accent-[#38D9E6]"
