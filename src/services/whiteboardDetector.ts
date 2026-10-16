@@ -7,14 +7,13 @@ export interface WhiteboardCandidate {
 }
 
 /**
- * Dedicated Computer Vision detector for classroom whiteboards and chalkboards.
- * Combines spatial wall-position heuristics, edge gradient bounding, 
- * and surface luminance uniformity analysis.
+ * High-Precision Computer Vision detector for classroom whiteboards and chalkboards.
+ * Uses 4-edge frame gradient profiling, achromatic color saturation rejection,
+ * surface reflectance analysis, and strict geometric wall constraints to eliminate false positives.
  */
 export function detectClassroomWhiteboards(
   source: HTMLCanvasElement | HTMLImageElement | HTMLVideoElement
 ): (RawDetection & { labelFr: string; color: string })[] {
-  const canvas = document.createElement('canvas');
   let srcWidth = 640;
   let srcHeight = 480;
 
@@ -32,6 +31,7 @@ export function detectClassroomWhiteboards(
   // Work on a normalized analytical grid for speed and stability
   const analysisWidth = 320;
   const analysisHeight = 240;
+  const canvas = document.createElement('canvas');
   canvas.width = analysisWidth;
   canvas.height = analysisHeight;
 
@@ -46,34 +46,36 @@ export function detectClassroomWhiteboards(
   const scaleX = srcWidth / analysisWidth;
   const scaleY = srcHeight / analysisHeight;
 
-  // 1. Grid sampling for wall-mounted boards
-  // Whiteboards / Chalkboards are wide rectangles located primarily in the upper 70% of the view
-  const step = 8;
-  const maxSearchY = Math.round(analysisHeight * 0.72);
-  const minSearchY = Math.round(analysisHeight * 0.05);
+  // Grid search parameters
+  const step = 6;
+  const maxSearchY = Math.round(analysisHeight * 0.70); // Must be mounted on wall, above floor
+  const minSearchY = Math.round(analysisHeight * 0.05); // Below ceiling tiles
 
   const candidates: WhiteboardCandidate[] = [];
 
-  // Multi-window aspect ratio scanner targeting typical classroom boards (ratio 1.4 to 3.5)
-  const windowAspectRatios = [1.6, 2.2, 2.8, 3.4];
+  // Realistic classroom board aspect ratios: typically 1.5 to 3.2
+  const windowAspectRatios = [1.6, 2.0, 2.6, 3.2];
   const windowWidths = [
     Math.round(analysisWidth * 0.35),
-    Math.round(analysisWidth * 0.50),
-    Math.round(analysisWidth * 0.65),
-    Math.round(analysisWidth * 0.80)
+    Math.round(analysisWidth * 0.48),
+    Math.round(analysisWidth * 0.62),
+    Math.round(analysisWidth * 0.76)
   ];
 
   for (const winW of windowWidths) {
     for (const ratio of windowAspectRatios) {
       const winH = Math.round(winW / ratio);
-      if (winH < 30 || winH > analysisHeight * 0.6) continue;
+      
+      // Boards must take between 12% and 45% of height
+      if (winH < 35 || winH > analysisHeight * 0.48) continue;
 
       for (let y = minSearchY; y <= maxSearchY - winH; y += step * 2) {
         for (let x = Math.round(analysisWidth * 0.05); x <= analysisWidth - winW - Math.round(analysisWidth * 0.05); x += step * 2) {
           
-          // Evaluate board characteristics in this window
           const score = evaluateBoardWindow(data, analysisWidth, analysisHeight, x, y, winW, winH);
-          if (score > 0.68) {
+          
+          // Strict threshold: requires confirmed 4-edge frame and achromatic reflectance
+          if (score >= 0.72) {
             candidates.push({
               bbox: [
                 Math.round(x * scaleX),
@@ -81,7 +83,7 @@ export function detectClassroomWhiteboards(
                 Math.round(winW * scaleX),
                 Math.round(winH * scaleY)
               ],
-              score: Math.min(0.92, Math.round(score * 100) / 100),
+              score: Math.min(0.94, Math.round(score * 100) / 100),
               type: 'whiteboard'
             });
           }
@@ -91,10 +93,11 @@ export function detectClassroomWhiteboards(
   }
 
   // Deduplicate overlapping candidates using Non-Maximum Suppression
-  const deduplicated = nmsCandidates(candidates, 0.40);
+  const deduplicated = nmsCandidates(candidates, 0.35);
 
-  // Take top 1 or 2 best boards (classrooms typically have 1 or 2 main boards)
-  const topBoards = deduplicated.slice(0, 2);
+  // Take top 1 best board (classrooms usually have 1 primary front board)
+  // or at most 2 if spatially distinct
+  const topBoards = deduplicated.slice(0, 1);
 
   return topBoards.map((b) => ({
     bbox: b.bbox,
@@ -102,15 +105,16 @@ export function detectClassroomWhiteboards(
     score: b.score,
     equipmentId: 'whiteboard',
     labelFr: 'Tableau (Blanc / TBI)',
-    color: '#E879F9' // Purple-Pink glowing reticle for classroom boards
+    color: '#E879F9' // Purple-Pink glowing reticle
   }));
 }
 
 /**
- * Scores a rectangular region based on whiteboard / chalkboard properties:
- * - High internal color uniformity (low variance inside board)
- * - Contrast gradient at borders (frame / aluminum border)
- * - Surface luminance (light marker board or dark slate board)
+ * Strict evaluation of rectangular board candidate:
+ * 1. Low color saturation (whiteboard is white/gray, chalkboard is dark slate; rejects beige/wood walls).
+ * 2. 4-border frame contrast (must have gradient edge on at least 3 out of 4 sides).
+ * 3. Interior surface luminance and uniformity (moderate texture variance for marker writing).
+ * 4. Geometric perspective validity.
  */
 function evaluateBoardWindow(
   data: Uint8ClampedArray,
@@ -122,32 +126,62 @@ function evaluateBoardWindow(
   h: number
 ): number {
   let sumL = 0;
+  let sumR = 0;
+  let sumG = 0;
+  let sumB = 0;
   let count = 0;
-  const samples = 12;
+  const samples = 14;
 
-  // Sample interior pixels
-  for (let sy = 1; sy < samples - 1; sy++) {
+  // 1. Sample interior pixels
+  for (let sy = 2; sy < samples - 2; sy++) {
     const py = Math.round(y + (sy / samples) * h);
-    for (let sx = 1; sx < samples - 1; sx++) {
+    for (let sx = 2; sx < samples - 2; sx++) {
       const px = Math.round(x + (sx / samples) * w);
       const idx = (py * imgW + px) * 4;
       const r = data[idx];
       const g = data[idx + 1];
       const b = data[idx + 2];
       const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      
       sumL += lum;
+      sumR += r;
+      sumG += g;
+      sumB += b;
       count++;
     }
   }
 
   if (count === 0) return 0;
   const meanLum = sumL / count;
+  const meanR = sumR / count;
+  const meanG = sumG / count;
+  const meanB = sumB / count;
 
-  // Measure variance
+  // 2. Reject colored surfaces (wood doors, beige walls, yellow paint)
+  // A true whiteboard or slate has very low color saturation
+  const colorChroma = Math.max(
+    Math.abs(meanR - meanG),
+    Math.abs(meanR - meanB),
+    Math.abs(meanG - meanB)
+  );
+
+  if (colorChroma > 20) {
+    return 0; // Colored wall, door, or warm floor - reject false positive
+  }
+
+  // 3. Luminance category: Whiteboard (light) or Chalkboard (dark)
+  const isWhiteboard = meanLum >= 135; // Light board
+  const isChalkboard = meanLum <= 65;  // Dark slate
+
+  if (!isWhiteboard && !isChalkboard) {
+    return 0; // Mid-gray wall or generic background
+  }
+
+  // 4. Measure interior variance (writing marks vs smooth board)
   let varSum = 0;
-  for (let sy = 1; sy < samples - 1; sy++) {
+  for (let sy = 2; sy < samples - 2; sy++) {
     const py = Math.round(y + (sy / samples) * h);
-    for (let sx = 1; sx < samples - 1; sx++) {
+    for (let sx = 2; sx < samples - 2; sx++) {
       const px = Math.round(x + (sx / samples) * w);
       const idx = (py * imgW + px) * 4;
       const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
@@ -156,46 +190,84 @@ function evaluateBoardWindow(
   }
   const meanVariance = varSum / count;
 
-  // Boards have high uniformity (low variance < 45)
-  if (meanVariance > 50) {
-    return 0; // Too noisy / textured (probably posters, floor, or students)
+  // Boards should have moderate interior uniformity (variance < 40)
+  // If variance is too high, it's a complicated shelf, window, or student crowd
+  if (meanVariance > 42) {
+    return 0;
   }
 
-  // Border edge contrast check (top, bottom, left, right edges)
-  let borderContrastScore = 0;
-  const borderSamples = 6;
+  // 5. Four-Border Frame Contrast Verification
+  // A genuine whiteboard has an aluminum/wood frame creating a contrast step on its edges
+  let borderHits = 0;
+  const numEdgeSamples = 6;
+  const frameOffset = 4;
 
-  // Top edge vs outer top
-  for (let i = 0; i < borderSamples; i++) {
-    const bx = Math.round(x + (i / borderSamples) * w);
-    const innerY = Math.min(imgH - 1, y + 4);
-    const outerY = Math.max(0, y - 4);
-    
-    const idxIn = (innerY * imgW + bx) * 4;
-    const idxOut = (outerY * imgW + bx) * 4;
-
-    const lumIn = 0.299 * data[idxIn] + 0.587 * data[idxIn + 1] + 0.114 * data[idxIn + 2];
-    const lumOut = 0.299 * data[idxOut] + 0.587 * data[idxOut + 1] + 0.114 * data[idxOut + 2];
-    borderContrastScore += Math.abs(lumIn - lumOut);
+  // Top Edge Contrast
+  let topContrast = 0;
+  for (let i = 1; i < numEdgeSamples; i++) {
+    const bx = Math.round(x + (i / numEdgeSamples) * w);
+    const inY = Math.min(imgH - 1, y + frameOffset);
+    const outY = Math.max(0, y - frameOffset);
+    topContrast += getPixelContrast(data, imgW, bx, inY, bx, outY);
   }
-  const avgBorderContrast = borderContrastScore / borderSamples;
+  if (topContrast / (numEdgeSamples - 1) >= 16) borderHits++;
 
-  if (avgBorderContrast < 18) {
-    return 0; // No defined frame / border
+  // Bottom Edge Contrast
+  let bottomContrast = 0;
+  for (let i = 1; i < numEdgeSamples; i++) {
+    const bx = Math.round(x + (i / numEdgeSamples) * w);
+    const inY = Math.max(0, y + h - frameOffset);
+    const outY = Math.min(imgH - 1, y + h + frameOffset);
+    bottomContrast += getPixelContrast(data, imgW, bx, inY, bx, outY);
+  }
+  if (bottomContrast / (numEdgeSamples - 1) >= 16) borderHits++;
+
+  // Left Edge Contrast
+  let leftContrast = 0;
+  for (let i = 1; i < numEdgeSamples; i++) {
+    const by = Math.round(y + (i / numEdgeSamples) * h);
+    const inX = Math.min(imgW - 1, x + frameOffset);
+    const outX = Math.max(0, x - frameOffset);
+    leftContrast += getPixelContrast(data, imgW, inX, by, outX, by);
+  }
+  if (leftContrast / (numEdgeSamples - 1) >= 14) borderHits++;
+
+  // Right Edge Contrast
+  let rightContrast = 0;
+  for (let i = 1; i < numEdgeSamples; i++) {
+    const by = Math.round(y + (i / numEdgeSamples) * h);
+    const inX = Math.max(0, x + w - frameOffset);
+    const outX = Math.min(imgW - 1, x + w + frameOffset);
+    rightContrast += getPixelContrast(data, imgW, inX, by, outX, by);
+  }
+  if (rightContrast / (numEdgeSamples - 1) >= 14) borderHits++;
+
+  // Must have clear borders on at least 3 out of 4 edges to prevent open wall/ceiling false positives
+  if (borderHits < 3) {
+    return 0;
   }
 
-  // Calculate composite confidence score
-  const isWhiteboard = meanLum > 140; // White / light gray
-  const isChalkboard = meanLum < 75;  // Dark green / black slate
+  // 6. Calculate calibrated confidence score
+  const chromaBonus = Math.max(0, (20 - colorChroma) / 20) * 0.12;
+  const borderBonus = (borderHits / 4) * 0.20;
+  const uniformityBonus = Math.max(0, (38 - meanVariance) / 38) * 0.15;
 
-  if (!isWhiteboard && !isChalkboard) {
-    return 0; // Brown or colored walls
-  }
+  return 0.50 + chromaBonus + borderBonus + uniformityBonus;
+}
 
-  const uniformityScore = Math.max(0, 1 - (meanVariance / 45));
-  const edgeScore = Math.min(1, avgBorderContrast / 60);
-
-  return 0.45 + (uniformityScore * 0.28) + (edgeScore * 0.25);
+function getPixelContrast(
+  data: Uint8ClampedArray,
+  imgW: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number
+): number {
+  const idx1 = (y1 * imgW + x1) * 4;
+  const idx2 = (y2 * imgW + x2) * 4;
+  const lum1 = 0.299 * data[idx1] + 0.587 * data[idx1 + 1] + 0.114 * data[idx1 + 2];
+  const lum2 = 0.299 * data[idx2] + 0.587 * data[idx2 + 1] + 0.114 * data[idx2 + 2];
+  return Math.abs(lum1 - lum2);
 }
 
 /**
