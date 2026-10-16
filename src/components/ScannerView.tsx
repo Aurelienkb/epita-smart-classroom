@@ -39,6 +39,15 @@ interface ScannerViewProps {
   onNavigateToAudit: () => void;
 }
 
+export type AngleSlot = 'left' | 'center' | 'right';
+
+export interface AngleCaptureData {
+  imageSrc: string | null;
+  output: DetectionOutput | null;
+  detections: InteractiveDetection[];
+  label: string;
+}
+
 export const ScannerView: React.FC<ScannerViewProps> = ({
   selectedRoom,
   modelStatus,
@@ -63,6 +72,15 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [currentImageSrc, setCurrentImageSrc] = useState<string | null>(null);
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null);
+
+  // Multi-Angle Guided Capture state (Optionnelle B)
+  const [captureMode, setCaptureMode] = useState<'single' | 'multi_angle'>('single');
+  const [activeAngle, setActiveAngle] = useState<AngleSlot>('center');
+  const [multiAngleData, setMultiAngleData] = useState<Record<AngleSlot, AngleCaptureData>>({
+    left: { imageSrc: null, output: null, detections: [], label: 'Angle Gauche (Rangées 1-3)' },
+    center: { imageSrc: null, output: null, detections: [], label: 'Angle Centre (Vue Globale)' },
+    right: { imageSrc: null, output: null, detections: [], label: 'Angle Droit (Rangées 4-6)' }
+  });
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -213,12 +231,41 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         snapshotUrl = canvasRef.current.toDataURL('image/jpeg', 0.85);
       }
 
+      if (captureMode === 'multi_angle') {
+        setMultiAngleData(prev => ({
+          ...prev,
+          [activeAngle]: {
+            ...prev[activeAngle],
+            imageSrc: snapshotUrl || currentImageSrc,
+            output,
+            detections: output.detections
+          }
+        }));
+      }
+
       onAnalysisComplete(output, snapshotUrl);
     } catch (err: unknown) {
       console.error('Detection failed:', err);
       alert(err instanceof Error ? err.message : 'Erreur lors de l\'analyse');
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  // Switch between left, center, right angles in multi-angle mode
+  const handleSwitchAngle = (angle: AngleSlot) => {
+    stopCamera();
+    setActiveAngle(angle);
+    const data = multiAngleData[angle];
+    if (data.imageSrc) {
+      setCurrentImageSrc(data.imageSrc);
+      setLastOutput(data.output);
+      if (data.output) {
+        onAnalysisComplete(data.output, data.imageSrc);
+      }
+    } else {
+      setCurrentImageSrc(null);
+      setLastOutput(null);
     }
   };
 
@@ -276,12 +323,118 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Capturez un cliché ponctuel pour analyser les équipements présents avec le modèle COCO-SSD.
+            Capturez un cliché ponctuel ou réalisez une prise de vues multi-angles (gauche / centre / droite).
           </p>
         </div>
 
-        <GuidedScanOverlay />
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Mode Switcher Pill */}
+          <div className="flex items-center bg-[#0B1020] p-1 rounded-xl border border-[#222E47]">
+            <button
+              onClick={() => {
+                setCaptureMode('single');
+                stopCamera();
+              }}
+              className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                captureMode === 'single'
+                  ? 'bg-[#151D30] text-[#38D9E6] shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Cliché Unique
+            </button>
+            <button
+              onClick={() => {
+                setCaptureMode('multi_angle');
+                stopCamera();
+              }}
+              className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all flex items-center space-x-1 ${
+                captureMode === 'multi_angle'
+                  ? 'bg-[#38D9E6]/20 border border-[#38D9E6]/50 text-[#38D9E6] shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <span>Multi-Angles</span>
+              <span className="px-1.5 py-0.2 rounded bg-[#38D9E6]/20 text-[9px] font-bold">3 angles</span>
+            </button>
+          </div>
+
+          <GuidedScanOverlay />
+        </div>
       </div>
+
+      {/* Multi-Angle Guided Capture Stepper Bar (Optionnelle B) */}
+      {captureMode === 'multi_angle' && (
+        <div className="bg-[#151D30] border border-[#38D9E6]/30 p-3 sm:p-4 rounded-2xl shadow-xl space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#222E47] pb-2.5">
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-bold text-white flex items-center space-x-1.5">
+                  <span className="w-2 h-2 rounded-full bg-[#38D9E6] animate-pulse"></span>
+                  <span>Prise de Vues Multi-Angles (Gauche · Centre · Droite)</span>
+                </span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-[#34D399]/20 text-[#34D399] border border-[#34D399]/40">
+                  Déduplication déontologique active
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Prenez 3 photos successives pour couvrir les angles morts sans additionner aveuglément les doublons.
+              </p>
+            </div>
+
+            {/* Quick 1-click test button */}
+            <button
+              onClick={() => {
+                stopCamera();
+                handleSelectSample(SAMPLE_IMAGES[0]);
+                setActiveAngle('center');
+              }}
+              className="text-[11px] px-3 py-1.5 rounded-lg bg-[#0B1020] hover:bg-[#1B253D] border border-[#38D9E6]/40 text-[#38D9E6] font-semibold flex items-center space-x-1 transition-all"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Charger Démo Salle 104</span>
+            </button>
+          </div>
+
+          {/* 3 Angle Tabs */}
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { id: 'left' as AngleSlot, label: '◀️ Angle Gauche', desc: 'Rangées gauche / fenêtres' },
+              { id: 'center' as AngleSlot, label: '⏺️ Angle Centre (Réf)', desc: 'Vue d\'ensemble estrade' },
+              { id: 'right' as AngleSlot, label: '▶️ Angle Droit', desc: 'Rangées droite / fond' }
+            ].map((slot) => {
+              const isSelected = activeAngle === slot.id;
+              const slotData = multiAngleData[slot.id];
+              const isCaptured = !!slotData.imageSrc;
+              const count = slotData.output?.totalCount ?? 0;
+
+              return (
+                <div
+                  key={slot.id}
+                  onClick={() => handleSwitchAngle(slot.id)}
+                  className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all ${
+                    isSelected
+                      ? 'bg-[#1B253D] border-[#38D9E6] ring-1 ring-[#38D9E6]'
+                      : 'bg-[#0B1020] border-[#222E47] hover:border-[#38D9E6]/40'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white">{slot.label}</span>
+                    {isCaptured ? (
+                      <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-[#34D399]/20 text-[#34D399] border border-[#34D399]/40">
+                        {count} objet(s)
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-slate-500">À capturer</span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1 truncate">{slot.desc}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Camera Access Error Alert */}
       {cameraError && (
@@ -635,6 +788,99 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           onReclassifyDetection={onReclassifyDetection}
           onResetDetection={onResetDetection}
         />
+      )}
+
+      {/* Multi-Angle Consolidation & Comparison Matrix (Optionnelle B) */}
+      {captureMode === 'multi_angle' && (
+        <div className="bg-[#151D30] border border-[#222E47] rounded-2xl p-4 sm:p-5 shadow-2xl space-y-4">
+          <div className="flex items-center justify-between border-b border-[#222E47] pb-3">
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center space-x-2">
+                <LayoutGrid className="w-4 h-4 text-[#38D9E6]" />
+                <span>Comparaison des 3 Angles & Consolidation Déontologique</span>
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Vérification des équipements visibles par angle de vue sans double comptage des zones de recouvrement.
+              </p>
+            </div>
+          </div>
+
+          {/* Ethical Warning Banner on Spatial Deduplication */}
+          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start space-x-2.5">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div className="leading-relaxed">
+              <span className="font-bold text-amber-200">Règle de Déduplication Spatiale : </span>
+              Les détections des 3 angles <strong>ne sont pas additionnées automatiquement</strong> car les chaises et tables du centre apparaissent simultanément sur plusieurs clichés. L'inventaire de référence retenu pour l'audit officiel est l'<strong>angle actuellement sélectionné ({activeAngle === 'center' ? 'Centre' : activeAngle === 'left' ? 'Gauche' : 'Droit'})</strong>, complété par validation in-situ dans le tableau de bord.
+            </div>
+          </div>
+
+          {/* Side by side counts */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {(['left', 'center', 'right'] as AngleSlot[]).map((angleKey) => {
+              const data = multiAngleData[angleKey];
+              const isRef = activeAngle === angleKey;
+              return (
+                <div
+                  key={angleKey}
+                  className={`p-3 rounded-xl border ${
+                    isRef 
+                      ? 'bg-[#0B1020] border-[#38D9E6]' 
+                      : 'bg-[#0B1020]/50 border-[#222E47]'
+                  }`}
+                >
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="font-bold text-xs text-white">
+                      {angleKey === 'left' ? '◀️ Angle Gauche' : angleKey === 'center' ? '⏺️ Angle Centre' : '▶️ Angle Droit'}
+                    </span>
+                    {isRef && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#38D9E6]/20 text-[#38D9E6] border border-[#38D9E6]/40">
+                        Angle Référence Actif
+                      </span>
+                    )}
+                  </div>
+
+                  {data.output ? (
+                    <div className="space-y-1 text-xs">
+                      <p className="text-slate-300 font-medium">
+                        Total détecté : <strong className="text-white">{data.output.totalCount}</strong> objets
+                      </p>
+                      <div className="text-[11px] text-slate-400 space-y-0.5">
+                        {Object.entries(data.output.counts).filter(([_, c]) => c > 0).map(([k, c]) => (
+                          <div key={k} className="flex justify-between">
+                            <span>{EQUIPMENT_CATALOG[k as EquipmentId]?.labelFr.split('/')[0] || k}</span>
+                            <span className="font-bold text-slate-200">{c}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500 italic py-2">Aucun cliché analysé pour cet angle</p>
+                  )}
+
+                  {!isRef && data.output && (
+                    <button
+                      onClick={() => handleSwitchAngle(angleKey)}
+                      className="mt-3 w-full py-1.5 rounded-lg bg-[#151D30] hover:bg-[#1B253D] text-[11px] text-[#38D9E6] font-semibold transition-colors"
+                    >
+                      Basculer sur cet angle
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Action CTA */}
+          <div className="flex justify-end pt-2">
+            <button
+              onClick={onNavigateToAudit}
+              className="flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#38D9E6] to-[#34D399] text-[#0B1020] font-bold text-xs sm:text-sm hover:opacity-95 transition-all shadow-lg shadow-[#38D9E6]/20"
+            >
+              <span>Consolider l'audit avec cet angle ({activeAngle === 'center' ? 'Centre' : activeAngle === 'left' ? 'Gauche' : 'Droit'})</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Preset Sample Gallery Card */}
