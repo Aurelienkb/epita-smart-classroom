@@ -7,12 +7,12 @@
     <meta name="description" content="EPITA SmartScan - Intelligent Classroom Auditing powered by Browser AI Computer Vision" />
     
     <!-- PWA & Mobile Web App Meta -->
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="manifest" href="./manifest.webmanifest" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="EPITA SmartScan" />
-    <link rel="apple-touch-icon" href="/icon-192.png" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     
     <!-- Typography: Inter -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -28,7 +28,7 @@
       // Register Service Worker for PWA
       if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').then(
+          navigator.serviceWorker.register('./sw.js').then(
             (reg) => console.log('SmartScan ServiceWorker registered:', reg.scope),
             (err) => console.log('SmartScan ServiceWorker registration failed:', err)
           );
