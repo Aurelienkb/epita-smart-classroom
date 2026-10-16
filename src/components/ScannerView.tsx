@@ -12,7 +12,8 @@ import {
   ArrowRight,
   Maximize2,
   Image as ImageIcon,
-  SwitchCamera
+  SwitchCamera,
+  Zap
 } from 'lucide-react';
 import { ClassroomRoom, RawDetection, EquipmentId } from '../types';
 import { visionAIService, DetectionOutput, ModelStatus } from '../services/aiVision';
@@ -38,7 +39,8 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
 }) => {
   const [cameraActive, setCameraActive] = useState<boolean>(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
-  const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.45);
+  const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.28);
+  const [boostContrast, setBoostContrast] = useState<boolean>(true);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [lastOutput, setLastOutput] = useState<DetectionOutput | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -138,8 +140,8 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         throw new Error('Veuillez activer la caméra ou sélectionner une image de test avant de lancer l\'analyse.');
       }
 
-      // Execute genuine detection
-      const output = await visionAIService.detect(sourceElement, confidenceThreshold);
+      // Execute genuine detection with optional adaptive contrast boost
+      const output = await visionAIService.detect(sourceElement, confidenceThreshold, boostContrast);
 
       // Render bounding boxes onto visual canvas
       if (canvasRef.current) {
@@ -304,21 +306,38 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             />
           </div>
 
-          {/* Threshold Slider */}
-          <div className="flex items-center space-x-2 bg-[#0B1020] px-3 py-1 rounded-lg border border-[#222E47]">
-            <Sliders className="w-3.5 h-3.5 text-slate-400" />
-            <span className="text-[11px] text-slate-400 font-medium whitespace-nowrap">
-              Seuil : <span className="text-[#38D9E6] font-bold">{Math.round(confidenceThreshold * 100)}%</span>
-            </span>
-            <input
-              type="range"
-              min="0.30"
-              max="0.85"
-              step="0.05"
-              value={confidenceThreshold}
-              onChange={(e) => setConfidenceThreshold(parseFloat(e.target.value))}
-              className="w-20 sm:w-24 h-1.5 bg-[#222E47] rounded-lg appearance-none cursor-pointer accent-[#38D9E6]"
-            />
+          {/* Right Toolbar: Boost IA & Sensitivity Slider */}
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => setBoostContrast(!boostContrast)}
+              className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-xs font-semibold transition-all ${
+                boostContrast 
+                  ? 'bg-[#38D9E6]/20 border-[#38D9E6] text-[#38D9E6]' 
+                  : 'bg-[#0B1020] border-[#222E47] text-slate-400 hover:text-white'
+              }`}
+              title="Activer le prétraitement adaptatif pour détecter les objets sombres ou éloignés"
+            >
+              <Zap className={`w-3.5 h-3.5 ${boostContrast ? 'fill-[#38D9E6]' : ''}`} />
+              <span className="hidden sm:inline">Boost IA</span>
+            </button>
+
+            {/* Threshold Slider */}
+            <div className="flex items-center space-x-2 bg-[#0B1020] px-3 py-1 rounded-lg border border-[#222E47]">
+              <Sliders className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-[11px] text-slate-400 font-medium whitespace-nowrap">
+                Sensibilité : <span className="text-[#38D9E6] font-bold">{Math.round(confidenceThreshold * 100)}%</span>
+              </span>
+              <input
+                type="range"
+                min="0.15"
+                max="0.75"
+                step="0.05"
+                value={confidenceThreshold}
+                onChange={(e) => setConfidenceThreshold(parseFloat(e.target.value))}
+                className="w-18 sm:w-24 h-1.5 bg-[#222E47] rounded-lg appearance-none cursor-pointer accent-[#38D9E6]"
+                title="Abaisser le seuil pour détecter davantage d'équipements en arrière-plan"
+              />
+            </div>
           </div>
         </div>
 

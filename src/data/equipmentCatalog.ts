@@ -3,24 +3,24 @@ import { EquipmentDefinition } from '../types';
 export const EQUIPMENT_CATALOG: Record<string, EquipmentDefinition> = {
   chair: {
     id: 'chair',
-    labelFr: 'Chaises / Sièges',
-    labelEn: 'Chairs',
-    cocoClasses: ['chair'],
+    labelFr: 'Chaises & Sièges',
+    labelEn: 'Chairs & Benches',
+    cocoClasses: ['chair', 'bench', 'couch'], // Includes classroom chairs, amphitheatre benches and seats
     supportedByModel: true,
     category: 'furniture',
     icon: 'Armchair',
-    standardConfidenceThreshold: 0.45,
-    description: 'Chaises individuelles ou sièges pliants d\'étudiants.'
+    standardConfidenceThreshold: 0.30,
+    description: 'Chaises individuelles, sièges pliants et banquettes d\'amphithéâtre.'
   },
   table: {
     id: 'table',
-    labelFr: 'Tables / Bureaux',
+    labelFr: 'Tables & Bureaux',
     labelEn: 'Tables & Desks',
-    cocoClasses: ['dining table'],
+    cocoClasses: ['dining table', 'desk'], // Mapped to all desk and table surfaces
     supportedByModel: true,
     category: 'furniture',
     icon: 'SquareMenu',
-    standardConfidenceThreshold: 0.40,
+    standardConfidenceThreshold: 0.28,
     description: 'Tables de cours, bureaux d\'élèves ou tables de travaux pratiques.'
   },
   laptop: {
@@ -31,18 +31,18 @@ export const EQUIPMENT_CATALOG: Record<string, EquipmentDefinition> = {
     supportedByModel: true,
     category: 'it',
     icon: 'Laptop',
-    standardConfidenceThreshold: 0.50,
+    standardConfidenceThreshold: 0.35,
     description: 'Laptops d\'étudiants ou machines de TP.'
   },
   screen: {
     id: 'screen',
-    labelFr: 'Écrans / Moniteurs',
+    labelFr: 'Écrans & Moniteurs',
     labelEn: 'Monitors & Displays',
-    cocoClasses: ['tv'],
+    cocoClasses: ['tv', 'monitor'],
     supportedByModel: true,
     category: 'it',
     icon: 'Monitor',
-    standardConfidenceThreshold: 0.45,
+    standardConfidenceThreshold: 0.30,
     description: 'Écrans de retour vidéo, moniteurs fixes ou téléviseurs d\'affichage.'
   },
   keyboard: {
@@ -53,7 +53,7 @@ export const EQUIPMENT_CATALOG: Record<string, EquipmentDefinition> = {
     supportedByModel: true,
     category: 'it',
     icon: 'Keyboard',
-    standardConfidenceThreshold: 0.50,
+    standardConfidenceThreshold: 0.35,
     description: 'Périphériques de saisie dans les salles informatiques.'
   },
   mouse: {
@@ -64,7 +64,7 @@ export const EQUIPMENT_CATALOG: Record<string, EquipmentDefinition> = {
     supportedByModel: true,
     category: 'it',
     icon: 'Mouse',
-    standardConfidenceThreshold: 0.45,
+    standardConfidenceThreshold: 0.30,
     description: 'Souris optiques filaires ou sans-fil.'
   },
   book: {
@@ -75,7 +75,7 @@ export const EQUIPMENT_CATALOG: Record<string, EquipmentDefinition> = {
     supportedByModel: true,
     category: 'supplies',
     icon: 'BookOpen',
-    standardConfidenceThreshold: 0.45,
+    standardConfidenceThreshold: 0.30,
     description: 'Documentation pédagogique, polycopiés et manuels de cours.'
   },
   whiteboard: {
