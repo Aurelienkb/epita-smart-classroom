@@ -13,7 +13,8 @@ import {
   Maximize2,
   Image as ImageIcon,
   SwitchCamera,
-  Zap
+  Zap,
+  LayoutGrid
 } from 'lucide-react';
 import { ClassroomRoom, RawDetection, EquipmentId } from '../types';
 import { visionAIService, DetectionOutput, ModelStatus } from '../services/aiVision';
@@ -41,6 +42,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.28);
   const [boostContrast, setBoostContrast] = useState<boolean>(true);
+  const [enableSahi, setEnableSahi] = useState<boolean>(true);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [lastOutput, setLastOutput] = useState<DetectionOutput | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -140,8 +142,8 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         throw new Error('Veuillez activer la caméra ou sélectionner une image de test avant de lancer l\'analyse.');
       }
 
-      // Execute genuine detection with optional adaptive contrast boost
-      const output = await visionAIService.detect(sourceElement, confidenceThreshold, boostContrast);
+      // Execute genuine detection with optional adaptive contrast boost and SAHI multi-tile
+      const output = await visionAIService.detect(sourceElement, confidenceThreshold, boostContrast, enableSahi);
 
       // Render bounding boxes onto visual canvas
       if (canvasRef.current) {
@@ -315,10 +317,24 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                   ? 'bg-[#38D9E6]/20 border-[#38D9E6] text-[#38D9E6]' 
                   : 'bg-[#0B1020] border-[#222E47] text-slate-400 hover:text-white'
               }`}
-              title="Activer le prétraitement adaptatif pour détecter les objets sombres ou éloignés"
+              title="Activer le prétraitement adaptatif pour détacher le mobilier sombre"
             >
               <Zap className={`w-3.5 h-3.5 ${boostContrast ? 'fill-[#38D9E6]' : ''}`} />
               <span className="hidden sm:inline">Boost IA</span>
+            </button>
+
+            <button
+              onClick={() => setEnableSahi(!enableSahi)}
+              className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg border text-xs font-semibold transition-all ${
+                enableSahi 
+                  ? 'bg-[#34D399]/20 border-[#34D399] text-[#34D399]' 
+                  : 'bg-[#0B1020] border-[#222E47] text-slate-400 hover:text-white'
+              }`}
+              title="Tuilage Haute Définition (SAHI) : Découpe l'image en 4 quadrants pour détecter les chaises et tables éloignées avec 4x plus de résolution"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Tuilage HD (SAHI)</span>
+              <span className="sm:hidden">SAHI</span>
             </button>
 
             {/* Threshold Slider */}
@@ -462,6 +478,11 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
                 <span className="text-[10px] px-2 py-0.5 rounded bg-[#0B1020] text-slate-400 border border-[#222E47]">
                   Latence : {lastOutput.inferenceTimeMs} ms
                 </span>
+                {lastOutput.sahiEnabled && (
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-[#34D399]/20 text-[#34D399] border border-[#34D399]/40 font-semibold">
+                    Tuilage SAHI Actif (Inférence 4 Quadrants)
+                  </span>
+                )}
               </div>
 
               <button
