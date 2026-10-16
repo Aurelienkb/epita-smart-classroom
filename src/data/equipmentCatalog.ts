@@ -82,12 +82,12 @@ export const EQUIPMENT_CATALOG: Record<string, EquipmentDefinition> = {
     id: 'whiteboard',
     labelFr: 'Tableau (Blanc / TBI)',
     labelEn: 'Whiteboard',
-    cocoClasses: [], // Not supported in COCO-SSD standard dataset
-    supportedByModel: false,
+    cocoClasses: ['whiteboard'], // Supported via dedicated hybrid contour & reflectance vision engine
+    supportedByModel: true,
     category: 'infrastructure',
     icon: 'Presentation',
-    standardConfidenceThreshold: 0,
-    description: 'Tableau mural feutre ou tableau interactif. Non reconnu nativement par COCO-SSD.'
+    standardConfidenceThreshold: 0.65,
+    description: 'Tableau mural blanc, tableau noir de classe ou TBI interactif (analyse géométrique et réflectance).'
   },
   window: {
     id: 'window',

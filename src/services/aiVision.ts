@@ -2,6 +2,7 @@ import * as tf from '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import { RawDetection, EquipmentId } from '../types';
 import { mapCocoClassToEquipmentId, EQUIPMENT_CATALOG } from '../data/equipmentCatalog';
+import { detectClassroomWhiteboards } from './whiteboardDetector';
 
 export interface DetectionOutput {
   detections: (RawDetection & { labelFr: string; color: string })[];
@@ -355,6 +356,14 @@ class VisionAIService {
 
       counts[eqId] = (counts[eqId] || 0) + 1;
       confidenceSum[eqId] = (confidenceSum[eqId] || 0) + pred.score;
+    }
+
+    // Integrate specialized classroom whiteboard detector (wall contour & reflectance)
+    const detectedWhiteboards = detectClassroomWhiteboards(inputCanvas);
+    for (const wb of detectedWhiteboards) {
+      detections.push(wb);
+      counts.whiteboard = (counts.whiteboard || 0) + 1;
+      confidenceSum.whiteboard = (confidenceSum.whiteboard || 0) + wb.score;
     }
 
     const averageConfidenceByEquipment: Record<EquipmentId, number> = {} as any;
