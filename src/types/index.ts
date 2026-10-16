@@ -43,16 +43,24 @@ export interface ClassroomRoom {
   description: string;
 }
 
-export interface RawDetection {
+export type DetectionStatus = 'detected' | 'confirmed' | 'rejected' | 'reclassified';
+
+export interface InteractiveDetection {
+  id: string;
   bbox: [number, number, number, number]; // [x, y, width, height]
-  class: string;
+  originalClass: string;
+  originalEquipmentId: EquipmentId;
+  currentEquipmentId: EquipmentId;
   score: number;
-  equipmentId?: EquipmentId;
+  status: DetectionStatus;
+  labelFr: string;
+  color: string;
+  userNote?: string;
 }
 
 export type AuditItemStatus = 
-  | 'conforme'              // Nombre détecté = attendu
-  | 'ecart'                 // Nombre détecté != attendu
+  | 'conforme'              // Nombre consolidé = attendu
+  | 'ecart'                 // Nombre consolidé != attendu
   | 'non_verifiable'        // Équipement non pris en charge par le modèle
   | 'verifie_manuellement'; // Validé ou ajusté par le responsable
 
@@ -61,10 +69,19 @@ export interface AuditItemComparison {
   labelFr: string;
   supportedByModel: boolean;
   expectedCount: number;
-  detectedCount: number;
-  manualCount?: number;
+  
+  // Tripartite Separation (Model vs Human vs Consolidated)
+  initialDetectedCount: number; // Raw predictions from model
+  confirmedCount: number;       // Confirmed by human auditor
+  rejectedCount: number;        // Rejected false positive
+  reclassifiedInCount: number;  // Shifted into this category by auditor
+  reclassifiedOutCount: number; // Shifted out of this category by auditor
+  manualCount?: number;         // Manual in-situ count for non-model items
+
+  consolidatedCount: number;    // Effective verified count
+  discrepancy: number;          // consolidatedCount - expectedCount
+  
   manuallyVerified: boolean;
-  discrepancy: number; // (effectiveCount - expectedCount)
   status: AuditItemStatus;
   statusLabel: string;
   averageConfidence: number;
@@ -80,16 +97,34 @@ export interface AuditReportData {
   auditorRole: string;
   room: ClassroomRoom;
   confidenceThreshold: number;
-  totalDetectedObjects: number;
+  
+  // High-level metrics
+  totalInitialDetections: number;
+  totalConfirmedObjects: number;
+  totalRejectedObjects: number;
+  totalReclassifiedObjects: number;
+  totalConsolidatedObjects: number;
+
   recognizedCategoriesCount: number;
   verifiableRulesCount: number;
   discrepanciesCount: number;
   unsupportedItemsCount: number;
   auditReadinessScore: number; // 0 - 100%
   globalStatus: GlobalAuditStatus;
+  
   items: AuditItemComparison[];
+  interactiveDetections: InteractiveDetection[];
   technicalLimits: string[];
   recommendations: string[];
   privacyNotice: string;
+  imageSnapshotUrl?: string;
   durationSeconds?: number;
 }
+
+export type AuditWorkflowStep = 
+  | 1 // Sélectionner la salle
+  | 2 // Vérifier la configuration attendue
+  | 3 // Capturer ou importer une image
+  | 4 // Exécuter l'analyse IA
+  | 5 // Examiner et corriger (Interactive AI Review)
+  | 6; // Valider et exporter le rapport

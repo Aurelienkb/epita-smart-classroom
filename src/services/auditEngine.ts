@@ -3,10 +3,10 @@ import {
   EquipmentId, 
   AuditItemComparison, 
   AuditReportData, 
-  GlobalAuditStatus 
+  GlobalAuditStatus,
+  InteractiveDetection
 } from '../types';
 import { EQUIPMENT_CATALOG } from '../data/equipmentCatalog';
-import { DetectionOutput } from './aiVision';
 
 export interface ManualOverride {
   verified: boolean;
@@ -16,11 +16,12 @@ export interface ManualOverride {
 
 export function computeAuditReport(
   room: ClassroomRoom,
-  detectionOutput: DetectionOutput,
+  detections: InteractiveDetection[],
   manualOverrides: Record<string, ManualOverride> = {},
   auditorName: string = 'Auditeur Campus EPITA',
   auditorRole: string = 'Gestionnaire de Campus GITM',
-  confidenceThreshold: number = 0.45,
+  confidenceThreshold: number = 0.28,
+  imageSnapshotUrl?: string,
   durationSeconds?: number
 ): AuditReportData {
   const items: AuditItemComparison[] = [];
@@ -30,19 +31,41 @@ export function computeAuditReport(
   let unsupportedItemsCount = 0;
   let verifiedCategoriesCount = 0;
 
-  // We evaluate all equipment present in the expected config
+  // Evaluate all equipment categories configured for the room
   const equipmentKeys = Object.keys(room.expectedConfig) as EquipmentId[];
 
-  for (const eqId of equipmentKeys) {
+  // Also include any equipment detected by the model even if expected count was 0
+  const detectedKeys = new Set(detections.map(d => d.currentEquipmentId));
+  const allKeys = Array.from(new Set([...equipmentKeys, ...detectedKeys]));
+
+  for (const eqId of allKeys) {
     const expected = room.expectedConfig[eqId] ?? 0;
-    // Skip items neither expected nor detected
-    const detected = detectionOutput.counts[eqId] || 0;
     const catalogItem = EQUIPMENT_CATALOG[eqId];
     const isSupported = catalogItem ? catalogItem.supportedByModel : false;
     const override = manualOverrides[eqId] || { verified: false };
-    const avgConfidence = detectionOutput.averageConfidenceByEquipment[eqId] || 0;
 
-    if (expected === 0 && detected === 0) {
+    // Tripartite breakdown
+    const initialDetected = detections.filter(d => d.originalEquipmentId === eqId);
+    const initialDetectedCount = initialDetected.length;
+    
+    const confirmedCount = detections.filter(d => d.currentEquipmentId === eqId && d.status === 'confirmed').length;
+    const rejectedCount = detections.filter(d => d.originalEquipmentId === eqId && d.status === 'rejected').length;
+    const reclassifiedInCount = detections.filter(d => d.currentEquipmentId === eqId && d.originalEquipmentId !== eqId && d.status === 'reclassified').length;
+    const reclassifiedOutCount = detections.filter(d => d.originalEquipmentId === eqId && d.currentEquipmentId !== eqId && d.status === 'reclassified').length;
+
+    // Valid active detections (not rejected as false positive)
+    const validDetections = detections.filter(d => d.currentEquipmentId === eqId && d.status !== 'rejected');
+    const validDetectedCount = validDetections.length;
+
+    // Average confidence of active detections
+    const avgConfidence = validDetectedCount > 0
+      ? Math.round(validDetections.reduce((sum, d) => sum + d.score, 0) / validDetectedCount * 100)
+      : (initialDetectedCount > 0 
+          ? Math.round(initialDetected.reduce((sum, d) => sum + d.score, 0) / initialDetectedCount * 100)
+          : 0);
+
+    // Skip items neither expected nor detected
+    if (expected === 0 && initialDetectedCount === 0 && !override.verified) {
       continue;
     }
 
@@ -52,47 +75,54 @@ export function computeAuditReport(
       verifiableRulesCount++;
     }
 
+    // Consolidated count calculation
+    let consolidatedCount = validDetectedCount;
+    let discrepancy = 0;
     let status: AuditItemComparison['status'];
     let statusLabel: string;
-    let discrepancy = 0;
     let observations = '';
 
     if (override.verified) {
       verifiedCategoriesCount++;
       status = 'verifie_manuellement';
       statusLabel = 'Vérifié manuellement par le responsable';
-      const effectiveCount = override.manualCount !== undefined ? override.manualCount : detected;
-      discrepancy = effectiveCount - expected;
-
       if (override.manualCount !== undefined) {
-        observations = `Comptage ajusté par l'auditeur (${override.manualCount} validés vs ${detected} vus par IA). ${override.notes || ''}`;
+        consolidatedCount = override.manualCount;
+        observations = `Validation in-situ (${override.manualCount} validés vs ${initialDetectedCount} détectés initialement). ${override.notes || ''}`;
       } else {
-        observations = `Présence validée in-situ par l'auditeur. ${override.notes || ''}`;
+        observations = `Présence confirmée in-situ par l'auditeur. ${override.notes || ''}`;
       }
+      discrepancy = consolidatedCount - expected;
     } else if (!isSupported) {
       status = 'non_verifiable';
       statusLabel = 'Non pris en charge par le modèle — vérification manuelle nécessaire';
-      discrepancy = 0; // Cannot compute numeric discrepancy without detection
-      observations = `${catalogItem?.labelFr || eqId} absent de l'ontologie COCO-SSD standard. Contrôle visuel humain requis.`;
+      consolidatedCount = 0;
+      discrepancy = 0;
+      observations = `${catalogItem?.labelFr || eqId} absent de l'ontologie d'entraînement. Contrôle visuel requis.`;
     } else {
-      // Supported and not yet manually verified
-      discrepancy = detected - expected;
-      
+      // Supported by model and reviewed
+      discrepancy = consolidatedCount - expected;
+
       if (discrepancy === 0) {
         status = 'conforme';
-        statusLabel = 'Conforme sur l\'image analysée';
-        observations = `Quantité détectée (${detected}) parfaitement conforme à la configuration théorique (${expected}).`;
+        statusLabel = 'Conforme sur le cliché analysé';
+        observations = `Quantité consolidée (${consolidatedCount}) égale à la dotation cible (${expected}).`;
         verifiedCategoriesCount++;
       } else {
         status = 'ecart';
-        statusLabel = `Écart observé sur l\'image analysée (${discrepancy > 0 ? '+' : ''}${discrepancy})`;
+        statusLabel = `Écart constaté (${discrepancy > 0 ? '+' : ''}${discrepancy})`;
         discrepanciesCount++;
 
         if (discrepancy < 0) {
-          observations = `Déficit de ${Math.abs(discrepancy)} unité(s). Note : une absence de détection ne signifie pas nécessairement une absence physique (mobilier hors champ ou occulté).`;
+          observations = `Déficit de ${Math.abs(discrepancy)} unité(s). Une absence de détection ne prouve pas une absence physique (mobilier occulté ou hors champ).`;
         } else {
-          observations = `Surplus de ${discrepancy} unité(s) détectée(s) par rapport à la dotation standard.`;
+          observations = `Surplus de ${discrepancy} unité(s) observée(s) par rapport à la dotation standard.`;
         }
+      }
+
+      // Append revision notes if human review modified this class
+      if (rejectedCount > 0 || reclassifiedInCount > 0 || reclassifiedOutCount > 0) {
+        observations += ` [Révision : ${rejectedCount} rejeté(s), +${reclassifiedInCount} reclassé(s) entrant(s), -${reclassifiedOutCount} sortant(s)].`;
       }
     }
 
@@ -101,10 +131,15 @@ export function computeAuditReport(
       labelFr: catalogItem ? catalogItem.labelFr : eqId,
       supportedByModel: isSupported,
       expectedCount: expected,
-      detectedCount: detected,
+      initialDetectedCount,
+      confirmedCount,
+      rejectedCount,
+      reclassifiedInCount,
+      reclassifiedOutCount,
       manualCount: override.manualCount,
-      manuallyVerified: override.verified,
+      consolidatedCount,
       discrepancy,
+      manuallyVerified: override.verified,
       status,
       statusLabel,
       averageConfidence: avgConfidence,
@@ -112,10 +147,16 @@ export function computeAuditReport(
     });
   }
 
-  // Calculate distinct recognized categories with at least 1 genuine detection
-  const recognizedCategoriesCount = Object.values(detectionOutput.counts).filter(c => c > 0).length;
+  // Summary counts
+  const totalInitialDetections = detections.length;
+  const totalConfirmedObjects = detections.filter(d => d.status === 'confirmed').length;
+  const totalRejectedObjects = detections.filter(d => d.status === 'rejected').length;
+  const totalReclassifiedObjects = detections.filter(d => d.status === 'reclassified').length;
+  const totalConsolidatedObjects = items.reduce((sum, item) => sum + (item.status !== 'non_verifiable' ? item.consolidatedCount : 0), 0);
 
-  // Calculate Audit Readiness (Complétude du contrôle)
+  const recognizedCategoriesCount = items.filter(i => i.consolidatedCount > 0).length;
+
+  // Audit Readiness calculation (completeness of checks)
   const totalConfiguredCategories = items.length || 1;
   const auditReadinessScore = Math.min(100, Math.round((verifiedCategoriesCount / totalConfiguredCategories) * 100));
 
@@ -129,22 +170,31 @@ export function computeAuditReport(
     globalStatus = 'CONFORME';
   }
 
-  // Formulate transparent technical limitations and clear recommendations
+  // Transparent technical limits
   const technicalLimits = [
-    'Le modèle pré-entraîné COCO-SSD (MobileNet v2) est limité à 80 classes générales et ne reconnaît pas les tableaux muraux ni les fenêtres.',
-    'L\'analyse est réalisée sur une photographie ponctuelle 2D. Des équipements peuvent être masqués par d\'autres rangées (occultation partielle) ou situés en dehors de l\'angle de champ.',
-    'Les variations d\'éclairage et les reflets sur les écrans peuvent modifier les scores de confiance du réseau de neurones.'
+    'Le modèle COCO-SSD (MobileNet v2) est optimisé pour 80 classes générales d\'objets. Les fenêtres et vidéoprojecteurs suspendus nécessitent un contrôle visuel direct.',
+    'L\'analyse repose sur une photographie ponctuelle 2D. Des équipements peuvent être partiellement masqués par d\'autres rangées (occultation de perspective).',
+    'Les scores de confiance représentent des probabilités relatives internes au réseau de neurones et non des mesures absolues de certitude terrain.'
   ];
 
-  const recommendations = [
-    discrepanciesCount > 0 
-      ? `Effectuer une vérification physique des ${discrepanciesCount} équipement(s) présentant des écarts de quantité.`
-      : 'Aucun écart quantitatif constaté sur les catégories reconnues par le modèle.',
-    unsupportedItemsCount > 0
-      ? `Contrôler manuellement les éléments non pris en charge par l'IA (Tableaux, Fenêtres, etc.) avant de clore l'audit.`
-      : 'Toutes les catégories de la salle bénéficient d\'un support automatisé.',
-    'Pour un audit exhaustif, capturer si nécessaire un second cliché depuis l\'angle opposé de la salle.'
-  ];
+  // Deterministic, rule-based operational recommendations
+  const recommendations: string[] = [];
+  if (discrepanciesCount > 0) {
+    recommendations.push(`Programmer un contrôle physique prioritaire pour les ${discrepanciesCount} équipement(s) présentant des écarts.`);
+  } else {
+    recommendations.push('Dotation en mobilier conforme sur le champ visuel analysé.');
+  }
+
+  if (totalRejectedObjects > 0) {
+    recommendations.push(`${totalRejectedObjects} faux positif(s) éliminé(s) lors de la revue interactive humaine.`);
+  }
+
+  const unverifiedNonSupported = items.filter(i => !i.supportedByModel && !i.manuallyVerified);
+  if (unverifiedNonSupported.length > 0) {
+    recommendations.push(`Valider manuellement in-situ les éléments hors IA (${unverifiedNonSupported.map(i => i.labelFr).join(', ')}).`);
+  }
+
+  recommendations.push('Conserver ce rapport interne pour le suivi trimestriel du parc immobilier EPITA.');
 
   const reportId = `AUD-${room.code}-${Date.now().toString(36).toUpperCase()}`;
 
@@ -161,7 +211,11 @@ export function computeAuditReport(
     auditorRole,
     room,
     confidenceThreshold,
-    totalDetectedObjects: detectionOutput.totalCount,
+    totalInitialDetections,
+    totalConfirmedObjects,
+    totalRejectedObjects,
+    totalReclassifiedObjects,
+    totalConsolidatedObjects,
     recognizedCategoriesCount,
     verifiableRulesCount,
     discrepanciesCount,
@@ -169,9 +223,11 @@ export function computeAuditReport(
     auditReadinessScore,
     globalStatus,
     items,
+    interactiveDetections: detections,
     technicalLimits,
     recommendations,
-    privacyNotice: 'Garantie de confidentialité EPITA : Traitement 100% local dans le navigateur. Aucune image ni donnée biométrique n\'est transmise ni conservée sur un serveur distant. Détection de personnes désactivée.',
+    privacyNotice: 'Engagement de confidentialité : Traitement local direct dans le navigateur (Edge Client). Aucune image ni donnée biométrique n\'est envoyée à un serveur distant. Détection de personnes désactivée.',
+    imageSnapshotUrl,
     durationSeconds
   };
 }

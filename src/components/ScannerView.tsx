@@ -16,17 +16,25 @@ import {
   Zap,
   LayoutGrid
 } from 'lucide-react';
-import { ClassroomRoom, RawDetection, EquipmentId } from '../types';
+import { ClassroomRoom, EquipmentId, InteractiveDetection } from '../types';
 import { visionAIService, DetectionOutput, ModelStatus } from '../services/aiVision';
-import { renderBoundingBoxes } from '../utils/canvasRenderer';
+import { renderBoundingBoxes, getDetectionAtPoint } from '../utils/canvasRenderer';
 import { SAMPLE_IMAGES, SampleImage } from '../data/sampleImages';
 import { GuidedScanOverlay } from './GuidedScanOverlay';
+import { InteractiveReviewPanel } from './InteractiveReviewPanel';
 import { EQUIPMENT_CATALOG } from '../data/equipmentCatalog';
 
 interface ScannerViewProps {
   selectedRoom: ClassroomRoom;
   modelStatus: ModelStatus;
   modelError?: string;
+  interactiveDetections: InteractiveDetection[];
+  selectedDetection: InteractiveDetection | null;
+  onSelectDetection: (detection: InteractiveDetection | null) => void;
+  onConfirmDetection: (id: string) => void;
+  onRejectDetection: (id: string) => void;
+  onReclassifyDetection: (id: string, newEquipmentId: EquipmentId) => void;
+  onResetDetection: (id: string) => void;
   onAnalysisComplete: (output: DetectionOutput, imageSnapshotUrl?: string) => void;
   onNavigateToAudit: () => void;
 }
@@ -35,6 +43,13 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   selectedRoom,
   modelStatus,
   modelError,
+  interactiveDetections,
+  selectedDetection,
+  onSelectDetection,
+  onConfirmDetection,
+  onRejectDetection,
+  onReclassifyDetection,
+  onResetDetection,
   onAnalysisComplete,
   onNavigateToAudit
 }) => {
@@ -54,6 +69,31 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const imageElementRef = useRef<HTMLImageElement | null>(null);
+  const frozenSourceRef = useRef<HTMLImageElement | HTMLVideoElement | HTMLCanvasElement | null>(null);
+
+  // Re-render canvas bounding boxes whenever interactive detections or selection changes
+  useEffect(() => {
+    if (canvasRef.current && frozenSourceRef.current && interactiveDetections.length > 0) {
+      renderBoundingBoxes(
+        canvasRef.current,
+        frozenSourceRef.current,
+        interactiveDetections,
+        selectedDetection?.id
+      );
+    }
+  }, [interactiveDetections, selectedDetection]);
+
+  // Canvas tap / click hit testing to select bounding boxes directly on the image
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current || interactiveDetections.length === 0) return;
+    const clickedDet = getDetectionAtPoint(
+      canvasRef.current,
+      interactiveDetections,
+      e.clientX,
+      e.clientY
+    );
+    onSelectDetection(clickedDet);
+  };
 
   // Initialize camera stream
   const startCamera = async () => {
@@ -130,10 +170,23 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
     setIsAnalyzing(true);
 
     try {
-      let sourceElement: HTMLVideoElement | HTMLImageElement | null = null;
+      let sourceElement: HTMLVideoElement | HTMLImageElement | HTMLCanvasElement | null = null;
 
       if (cameraActive && videoRef.current) {
-        sourceElement = videoRef.current;
+        // Freeze frame into an offscreen canvas for interactive review
+        const freezeCanvas = document.createElement('canvas');
+        freezeCanvas.width = videoRef.current.videoWidth || 1280;
+        freezeCanvas.height = videoRef.current.videoHeight || 720;
+        const fctx = freezeCanvas.getContext('2d');
+        if (fctx) {
+          fctx.drawImage(videoRef.current, 0, 0);
+          sourceElement = freezeCanvas;
+          const dataUrl = freezeCanvas.toDataURL('image/jpeg', 0.9);
+          stopCamera();
+          setCurrentImageSrc(dataUrl);
+        } else {
+          sourceElement = videoRef.current;
+        }
       } else if (imageElementRef.current) {
         sourceElement = imageElementRef.current;
       }
@@ -142,12 +195,14 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         throw new Error('Veuillez activer la caméra ou sélectionner une image de test avant de lancer l\'analyse.');
       }
 
+      frozenSourceRef.current = sourceElement;
+
       // Execute genuine detection with optional adaptive contrast boost and SAHI multi-tile
       const output = await visionAIService.detect(sourceElement, confidenceThreshold, boostContrast, enableSahi);
 
       // Render bounding boxes onto visual canvas
       if (canvasRef.current) {
-        renderBoundingBoxes(canvasRef.current, sourceElement, output.detections);
+        renderBoundingBoxes(canvasRef.current, sourceElement, output.detections, selectedDetection?.id);
       }
 
       setLastOutput(output);
@@ -194,6 +249,7 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
   // Trigger analysis when sample image is loaded into DOM
   const handleImageLoaded = () => {
     if (imageElementRef.current && canvasRef.current) {
+      frozenSourceRef.current = imageElementRef.current;
       // Clear canvas before running detection
       const canvas = canvasRef.current;
       const ctx = canvas.getContext('2d');
@@ -382,8 +438,20 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
           {/* Annotation Canvas (Renders image + bounding boxes) */}
           <canvas
             ref={canvasRef}
-            className={`w-full h-full object-contain max-h-[580px] ${(!cameraActive || lastOutput) && currentImageSrc || lastOutput ? 'block' : 'hidden'}`}
+            onClick={handleCanvasClick}
+            className={`w-full h-full object-contain max-h-[580px] ${
+              interactiveDetections.length > 0 ? 'cursor-pointer' : ''
+            } ${(!cameraActive || lastOutput) && currentImageSrc || lastOutput ? 'block' : 'hidden'}`}
+            title={interactiveDetections.length > 0 ? 'Cliquez sur un objet pour l\'examiner ou le corriger' : ''}
           />
+
+          {/* Interactive Click Helper Pill */}
+          {interactiveDetections.length > 0 && !isAnalyzing && (
+            <div className="absolute top-3 right-3 bg-[#0B1020]/90 border border-[#38D9E6]/50 text-[#38D9E6] px-3 py-1 rounded-full text-[11px] font-semibold backdrop-blur-md flex items-center space-x-1.5 shadow-lg pointer-events-none">
+              <span className="w-2 h-2 rounded-full bg-[#38D9E6] animate-pulse"></span>
+              <span>Cliquez sur une boîte pour réviser</span>
+            </div>
+          )}
 
           {/* Fallback Empty State Placeholder */}
           {!cameraActive && !currentImageSrc && !lastOutput && (
@@ -497,40 +565,56 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
             {/* Chips per detected equipment category */}
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
               {(Object.keys(lastOutput.counts) as EquipmentId[]).map((key) => {
-                const count = lastOutput.counts[key];
                 const catalog = EQUIPMENT_CATALOG[key];
-                if (!catalog || (!catalog.supportedByModel && count === 0)) return null;
+                if (!catalog) return null;
+
+                const initialCount = interactiveDetections.filter(d => d.originalEquipmentId === key).length;
+                const activeCount = interactiveDetections.filter(d => d.currentEquipmentId === key && d.status !== 'rejected').length;
+                const rejectedCount = interactiveDetections.filter(d => d.originalEquipmentId === key && d.status === 'rejected').length;
+                const reclassifiedIn = interactiveDetections.filter(d => d.currentEquipmentId === key && d.originalEquipmentId !== key && d.status === 'reclassified').length;
+
+                if (!catalog.supportedByModel && activeCount === 0 && initialCount === 0) return null;
 
                 const expected = selectedRoom.expectedConfig[key] || 0;
-                const isDiscrepant = count !== expected;
+                const isDiscrepant = activeCount !== expected;
 
                 return (
                   <div 
                     key={key}
-                    className={`p-2.5 rounded-xl border text-xs ${
-                      count > 0 
+                    className={`p-2.5 rounded-xl border text-xs transition-all ${
+                      activeCount > 0 
                         ? 'bg-[#0B1020] border-[#38D9E6]/40' 
                         : 'bg-[#0B1020]/40 border-[#222E47] opacity-60'
                     }`}
                   >
                     <div className="flex justify-between items-center text-slate-400 text-[11px]">
                       <span className="truncate">{catalog.labelFr.split('/')[0]}</span>
-                      {count > 0 && (
+                      {activeCount > 0 && (
                         <span className="text-[#38D9E6] font-semibold text-[10px]">
-                          {lastOutput.averageConfidenceByEquipment[key]}%
+                          {lastOutput.averageConfidenceByEquipment[key] || 0}%
                         </span>
                       )}
                     </div>
                     <div className="mt-1 flex items-baseline justify-between">
                       <span className="text-base font-extrabold text-white">
-                        {count} <span className="text-[10px] font-normal text-slate-400">détecté(s)</span>
+                        {activeCount} <span className="text-[10px] font-normal text-slate-400">validé(s)</span>
                       </span>
                       <span className={`text-[10px] font-medium px-1.5 py-0.2 rounded ${
                         isDiscrepant ? 'bg-rose-500/20 text-rose-300' : 'bg-emerald-500/20 text-emerald-300'
                       }`}>
-                        Attendu: {expected}
+                        Cible: {expected}
                       </span>
                     </div>
+                    {(rejectedCount > 0 || reclassifiedIn > 0) && (
+                      <div className="mt-1 flex items-center space-x-1 text-[9px]">
+                        {rejectedCount > 0 && (
+                          <span className="text-rose-400">-{rejectedCount} faux positif</span>
+                        )}
+                        {reclassifiedIn > 0 && (
+                          <span className="text-amber-400">+{reclassifiedIn} reclassé</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -539,6 +623,19 @@ export const ScannerView: React.FC<ScannerViewProps> = ({
         )}
 
       </div>
+
+      {/* Interactive AI Review Component (Amélioration prioritaire) */}
+      {interactiveDetections.length > 0 && (
+        <InteractiveReviewPanel
+          detections={interactiveDetections}
+          selectedDetection={selectedDetection}
+          onSelectDetection={onSelectDetection}
+          onConfirmDetection={onConfirmDetection}
+          onRejectDetection={onRejectDetection}
+          onReclassifyDetection={onReclassifyDetection}
+          onResetDetection={onResetDetection}
+        />
+      )}
 
       {/* Preset Sample Gallery Card */}
       <div className="bg-[#151D30] border border-[#222E47] p-4 sm:p-5 rounded-2xl">

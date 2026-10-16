@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ClassroomRoom, AuditReportData, EquipmentId } from './types';
+import { ClassroomRoom, AuditReportData, EquipmentId, InteractiveDetection, AuditWorkflowStep } from './types';
 import { DEFAULT_ROOMS, loadSavedRooms, saveRooms } from './data/defaultRooms';
 import { visionAIService, DetectionOutput, ModelStatus } from './services/aiVision';
 import { computeAuditReport, ManualOverride, loadAuditHistory } from './services/auditEngine';
@@ -7,6 +7,7 @@ import { computeAuditReport, ManualOverride, loadAuditHistory } from './services
 // Components
 import { Header } from './components/Header';
 import { Navigation, TabId } from './components/Navigation';
+import { GuidedAuditStepper } from './components/GuidedAuditStepper';
 import { OverviewView } from './components/OverviewView';
 import { ScannerView } from './components/ScannerView';
 import { AuditDashboardView } from './components/AuditDashboardView';
@@ -21,13 +22,16 @@ export const App: React.FC = () => {
 
   // Navigation state
   const [activeTab, setActiveTab] = useState<TabId>('overview');
+  const [currentStep, setCurrentStep] = useState<AuditWorkflowStep>(1);
 
   // AI Model state
   const [modelStatus, setModelStatus] = useState<ModelStatus>('unloaded');
   const [modelError, setModelError] = useState<string>('');
 
-  // Detection & Audit state
+  // Detection & Interactive Review state
   const [detectionOutput, setDetectionOutput] = useState<DetectionOutput | null>(null);
+  const [interactiveDetections, setInteractiveDetections] = useState<InteractiveDetection[]>([]);
+  const [selectedDetection, setSelectedDetection] = useState<InteractiveDetection | null>(null);
   const [imageSnapshotUrl, setImageSnapshotUrl] = useState<string | undefined>(undefined);
   const [manualOverrides, setManualOverrides] = useState<Record<string, ManualOverride>>({});
   const [auditReport, setAuditReport] = useState<AuditReportData | null>(null);
@@ -55,32 +59,118 @@ export const App: React.FC = () => {
     initModel();
   }, []);
 
-  // Recalculate audit report whenever detection output, selected room, or manual overrides change
+  // Recalculate audit report whenever interactive detections, room, or manual overrides change
   useEffect(() => {
-    if (!detectionOutput) {
+    if (!detectionOutput && interactiveDetections.length === 0) {
       setAuditReport(null);
       return;
     }
 
     const report = computeAuditReport(
       selectedRoom,
-      detectionOutput,
+      interactiveDetections,
       manualOverrides,
       'Auditeur Campus EPITA',
       'Responsable Déploiement GITM',
-      0.45
+      0.28,
+      imageSnapshotUrl
     );
 
     setAuditReport(report);
     setLastReport(report);
-  }, [detectionOutput, selectedRoom, manualOverrides]);
+  }, [interactiveDetections, selectedRoom, manualOverrides, imageSnapshotUrl, detectionOutput]);
 
   // Handle analysis output from ScannerView
   const handleAnalysisComplete = (output: DetectionOutput, snapshotUrl?: string) => {
     setDetectionOutput(output);
+    setInteractiveDetections(output.detections);
+    setSelectedDetection(output.detections.length > 0 ? output.detections[0] : null);
     setImageSnapshotUrl(snapshotUrl);
-    // Reset manual overrides for a new photo capture
     setManualOverrides({});
+    setCurrentStep(5); // Progress to Interactive AI Review step
+  };
+
+  // Interactive AI Review Handlers (Amélioration prioritaire)
+  const handleSelectDetection = (det: InteractiveDetection | null) => {
+    setSelectedDetection(det);
+  };
+
+  const handleConfirmDetection = (id: string) => {
+    setInteractiveDetections(prev => {
+      const updated = prev.map(d => d.id === id ? { ...d, status: 'confirmed' as const } : d);
+      if (selectedDetection?.id === id) {
+        setSelectedDetection(updated.find(d => d.id === id) || null);
+      }
+      return updated;
+    });
+  };
+
+  const handleRejectDetection = (id: string) => {
+    setInteractiveDetections(prev => {
+      const updated = prev.map(d => d.id === id ? { ...d, status: 'rejected' as const } : d);
+      if (selectedDetection?.id === id) {
+        setSelectedDetection(updated.find(d => d.id === id) || null);
+      }
+      return updated;
+    });
+  };
+
+  const handleReclassifyDetection = (id: string, newEquipmentId: EquipmentId) => {
+    setInteractiveDetections(prev => {
+      const updated = prev.map(d => d.id === id ? {
+        ...d,
+        status: 'reclassified' as const,
+        currentEquipmentId: newEquipmentId
+      } : d);
+      if (selectedDetection?.id === id) {
+        setSelectedDetection(updated.find(d => d.id === id) || null);
+      }
+      return updated;
+    });
+  };
+
+  const handleResetDetection = (id: string) => {
+    setInteractiveDetections(prev => {
+      const updated = prev.map(d => d.id === id ? {
+        ...d,
+        status: 'detected' as const,
+        currentEquipmentId: d.originalEquipmentId
+      } : d);
+      if (selectedDetection?.id === id) {
+        setSelectedDetection(updated.find(d => d.id === id) || null);
+      }
+      return updated;
+    });
+  };
+
+  // Guided Workflow Stepper Handler (Parcours en 6 étapes)
+  const handleGoToStep = (step: AuditWorkflowStep) => {
+    setCurrentStep(step);
+    switch (step) {
+      case 1:
+        setActiveTab('overview');
+        break;
+      case 2:
+        setActiveTab('settings');
+        break;
+      case 3:
+      case 4:
+      case 5:
+        setActiveTab('scanner');
+        break;
+      case 6:
+        setActiveTab('report');
+        break;
+    }
+  };
+
+  const handleTabChange = (tab: TabId) => {
+    setActiveTab(tab);
+    if (tab === 'overview') setCurrentStep(1);
+    else if (tab === 'settings') setCurrentStep(2);
+    else if (tab === 'scanner') setCurrentStep(interactiveDetections.length > 0 ? 5 : 3);
+    else if (tab === 'audit') setCurrentStep(5);
+    else if (tab === 'report') setCurrentStep(6);
   };
 
   // Handle human-in-the-loop manual adjustment
@@ -94,18 +184,18 @@ export const App: React.FC = () => {
   // Handle loading an audit report from history
   const handleLoadHistoricalAudit = (report: AuditReportData) => {
     setAuditReport(report);
-    // Find matching room if still exists
+    setInteractiveDetections(report.interactiveDetections || []);
     const matchingRoom = rooms.find(r => r.id === report.room.id);
     if (matchingRoom) {
       setSelectedRoom(matchingRoom);
     }
     setActiveTab('report');
+    setCurrentStep(6);
   };
 
   // Room switching handler
   const handleSelectRoom = (room: ClassroomRoom) => {
     setSelectedRoom(room);
-    // Keep detections if already present, but reset overrides
     setManualOverrides({});
   };
 
@@ -124,21 +214,40 @@ export const App: React.FC = () => {
       {/* Navigation */}
       <Navigation
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={handleTabChange}
         hasAuditReady={!!auditReport}
         discrepanciesCount={auditReport?.discrepanciesCount}
       />
 
+      {/* Guided Audit Workflow Stepper (Parcours d'Audit Guidé en 6 étapes) */}
+      <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-4 pb-0">
+        <GuidedAuditStepper
+          currentStep={currentStep}
+          onGoToStep={handleGoToStep}
+          canProceedToStep5={interactiveDetections.length > 0}
+          canProceedToStep6={!!auditReport}
+        />
+      </div>
+
       {/* Main Content Viewport */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-5">
         {activeTab === 'overview' && (
           <OverviewView
             selectedRoom={selectedRoom}
             modelStatus={modelStatus}
             lastReport={lastReport}
-            onStartNewAudit={() => setActiveTab('scanner')}
-            onNavigateToAudit={() => setActiveTab('audit')}
-            onNavigateToSettings={() => setActiveTab('settings')}
+            onStartNewAudit={() => {
+              setCurrentStep(3);
+              setActiveTab('scanner');
+            }}
+            onNavigateToAudit={() => {
+              setCurrentStep(5);
+              setActiveTab('audit');
+            }}
+            onNavigateToSettings={() => {
+              setCurrentStep(2);
+              setActiveTab('settings');
+            }}
           />
         )}
 
@@ -147,8 +256,18 @@ export const App: React.FC = () => {
             selectedRoom={selectedRoom}
             modelStatus={modelStatus}
             modelError={modelError}
+            interactiveDetections={interactiveDetections}
+            selectedDetection={selectedDetection}
+            onSelectDetection={handleSelectDetection}
+            onConfirmDetection={handleConfirmDetection}
+            onRejectDetection={handleRejectDetection}
+            onReclassifyDetection={handleReclassifyDetection}
+            onResetDetection={handleResetDetection}
             onAnalysisComplete={handleAnalysisComplete}
-            onNavigateToAudit={() => setActiveTab('audit')}
+            onNavigateToAudit={() => {
+              setCurrentStep(5);
+              setActiveTab('audit');
+            }}
           />
         )}
 
@@ -156,9 +275,16 @@ export const App: React.FC = () => {
           auditReport ? (
             <AuditDashboardView
               report={auditReport}
+              detections={interactiveDetections}
               onUpdateManualOverride={handleUpdateManualOverride}
-              onNavigateToReport={() => setActiveTab('report')}
-              onNavigateToScanner={() => setActiveTab('scanner')}
+              onNavigateToReport={() => {
+                setCurrentStep(6);
+                setActiveTab('report');
+              }}
+              onNavigateToScanner={() => {
+                setCurrentStep(3);
+                setActiveTab('scanner');
+              }}
             />
           ) : (
             <div className="bg-[#151D30] border border-[#222E47] rounded-3xl p-8 sm:p-12 text-center max-w-lg mx-auto my-12">
@@ -172,7 +298,10 @@ export const App: React.FC = () => {
                 Activez la caméra ou sélectionnez une image de test dans le scanner pour générer l'analyse comparative.
               </p>
               <button
-                onClick={() => setActiveTab('scanner')}
+                onClick={() => {
+                  setCurrentStep(3);
+                  setActiveTab('scanner');
+                }}
                 className="px-6 py-2.5 rounded-xl bg-[#38D9E6] text-[#0B1020] text-xs font-bold shadow-lg shadow-[#38D9E6]/20 hover:opacity-95 transition-all"
               >
                 Ouvrir le Scanner IA
@@ -186,13 +315,19 @@ export const App: React.FC = () => {
             <AuditReportView
               report={auditReport}
               imageSnapshotUrl={imageSnapshotUrl}
-              onBackToAudit={() => setActiveTab('audit')}
+              onBackToAudit={() => {
+                setCurrentStep(5);
+                setActiveTab('audit');
+              }}
             />
           ) : (
             <div className="bg-[#151D30] border border-[#222E47] rounded-3xl p-8 text-center max-w-md mx-auto my-12">
               <p className="text-xs text-slate-400 mb-4">Veuillez d'abord réaliser une analyse d'image.</p>
               <button
-                onClick={() => setActiveTab('scanner')}
+                onClick={() => {
+                  setCurrentStep(3);
+                  setActiveTab('scanner');
+                }}
                 className="px-4 py-2 rounded-xl bg-[#38D9E6] text-[#0B1020] text-xs font-bold"
               >
                 Aller au Scanner
